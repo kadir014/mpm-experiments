@@ -1,0 +1,34 @@
+[project]
+name = "mpm"
+description = "MPM playground"
+version = "0.0.0"
+readme = "README.md"
+authors = [
+    {name="Kadir Aksoy"},
+]
+classifiers = [
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Topic :: Games/Entertainment",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "cffi >= 1.17.0",
+]
+requires-python = ">=3.12"
+
+license = "MIT"
+
+[project.urls]
+homepage = "https://github.com/kadir014/mpm-experiments"
+bugtracker = "https://github.com/kadir014/mpm-experiments/issues"
+
+[build-system]
+requires = [
+    "setuptools",
+    "cffi >= 1.17.0",
+]
+build-backend = "setuptools.build_meta"
