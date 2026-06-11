@@ -34,7 +34,7 @@ particle_surf2.fill((115, 227, 64))
 sim = mpm.MPM((100, 100), hertz=40.0, substeps=8)
 #sim.gravity = mpm.Vector2(0.0)
 #sim.gravity = mpm.Vector2(0.0, 3.0)
-sim.gravity = mpm.Vector2(0.0, 9.81) * 1.75
+sim.gravity = mpm.Vector2(0.0, 9.81) * 2.3
 
 def spawn(sp: pygame.Vector2, size: tuple[int, int], e: float = 15000.0, mass: float = 1.0, material: int = 1) -> None:
     for y in range(size[1]):
@@ -47,7 +47,7 @@ def spawn(sp: pygame.Vector2, size: tuple[int, int], e: float = 15000.0, mass: f
             #     continue
             p = pygame.Vector2(x, y) * 0.75 + sp
             r = 0.1
-            p += pygame.Vector2(uniform(-r, r), uniform(-r, r))
+            #p += pygame.Vector2(uniform(-r, r), uniform(-r, r))
             v = pygame.Vector2(uniform(-1, 1), uniform(-1, 1)) * 40
             v = pygame.Vector2()
             # if uniform(0, 1) <= 0.5:
@@ -63,7 +63,7 @@ def spawn(sp: pygame.Vector2, size: tuple[int, int], e: float = 15000.0, mass: f
     sim.precalc_volume()
 
 spawn(pygame.Vector2(3.0, 3), (40, 120), material=1)
-spawn(pygame.Vector2(65.0, 65), (10, 45), material=0)
+spawn(pygame.Vector2(65.0, 64), (5, 45), material=0)
 
 def point_segment_distance(
         p: pygame.Vector2,
