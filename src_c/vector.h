@@ -2,6 +2,7 @@
 #define NOVAPHYSICS_VECTOR_H
 
 #include <stdbool.h>
+#include <math.h>
 
 
 typedef struct {
@@ -23,7 +24,7 @@ typedef struct {
 /**
  * @brief Constant zero vector.
  */
-static const nvVector2 nvVector2_zero = {0.0, 0.0};
+static const nvVector2 nvVector2_zero = {0.0f, 0.0f};
 
 
 /**
@@ -219,6 +220,10 @@ static inline nvVector2 nvVector2_lerp(nvVector2 a, nvVector2 b, float t) {
  */
 static inline bool nvVector2_is_zero(nvVector2 v) {
     return v.x == 0.0 && v.y == 0.0;
+}
+
+static inline nvVector2 nvVector2_pow(nvVector2 v, float s) {
+    return NV_VECTOR2(powf(v.x, s), powf(v.y, s));
 }
 
 

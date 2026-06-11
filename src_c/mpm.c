@@ -1,4 +1,11 @@
 #include "mpm.h"
+#include <stdio.h>
+
+
+static inline float clamp(float d, float min, float max) {
+    const float t = d < min ? min : d;
+    return t > max ? max : t;
+}
 
 
 MPM *MPM_new(
@@ -13,17 +20,21 @@ MPM *MPM_new(
         return NULL;
     }
 
-    mpm->substeps = substeps;
-    mpm->dt = 1.0f / hertz / (float)substeps;
+    MPM_set_solver_settings(mpm, hertz, substeps);
 
     mpm->grid_width = grid_width;
     mpm->grid_height = grid_height;
+
+    mpm->gravity = NV_VECTOR2(0.0, 9.81);
 
     size_t n_cells = grid_width * grid_height;
     mpm->cells.velocity = malloc(sizeof(nvVector2) * n_cells);
     if (!(mpm->cells.velocity)) return NULL;
     mpm->cells.mass = malloc(sizeof(float) * n_cells);
     if (!(mpm->cells.mass)) return NULL;
+
+    mpm->max_particles = max_particles;
+    mpm->n_particles = 0;
 
     mpm->particles.C = malloc(sizeof(nvMatrix2) * max_particles);
     if (!(mpm->particles.C)) return NULL;
@@ -37,6 +48,10 @@ MPM *MPM_new(
     if (!(mpm->particles.mass)) return NULL;
     mpm->particles.volume0 = malloc(sizeof(float) * max_particles);
     if (!(mpm->particles.volume0)) return NULL;
+    mpm->particles.elastic_lambda = malloc(sizeof(float) * max_particles);
+    if (!(mpm->particles.elastic_lambda)) return NULL;
+    mpm->particles.elastic_mu = malloc(sizeof(float) * max_particles);
+    if (!(mpm->particles.elastic_mu)) return NULL;
 
     return mpm;
 }
@@ -53,6 +68,295 @@ void MPM_free(MPM *mpm) {
     free(mpm->particles.velocity);
     free(mpm->particles.mass);
     free(mpm->particles.volume0);
+    free(mpm->particles.elastic_lambda);
+    free(mpm->particles.elastic_mu);
 
     free(mpm);
+}
+
+void MPM_add_particle(
+    MPM *mpm,
+    nvVector2 position,
+    nvVector2 velocity,
+    float mass,
+    float elastic_lambda,
+    float elastic_mu
+) {
+    if (mpm->n_particles >= mpm->max_particles) return;
+
+    mpm->particles.position[mpm->n_particles] = position;
+    mpm->particles.velocity[mpm->n_particles] = velocity;
+    mpm->particles.mass[mpm->n_particles] = mass;
+    mpm->particles.C[mpm->n_particles] = nvMatrix2_zero;
+    mpm->particles.F[mpm->n_particles] = nvMatrix2_identity;
+    mpm->particles.elastic_lambda[mpm->n_particles] = elastic_lambda;
+    mpm->particles.elastic_mu[mpm->n_particles] = elastic_mu;
+    mpm->particles.volume0[mpm->n_particles] = 0.0;
+
+    mpm->n_particles++;
+}
+
+void MPM_set_solver_settings(MPM *mpm, float hertz, int substeps) {
+    mpm->substeps = substeps;
+    mpm->dt = 1.0f / hertz / (float)substeps;
+}
+
+static void MPM_clear_grid(MPM *mpm);
+static void MPM_p2g(MPM *mpm);
+static void MPM_grid_update(MPM *mpm);
+static void MPM_g2p(MPM *mpm);
+
+void MPM_precalc_volume(MPM *mpm) {
+    MPM_p2g(mpm);
+
+    for (size_t i = 0; i < mpm->n_particles; i++) {
+        uint32_t cell_idx_x = (uint32_t)mpm->particles.position[i].x;
+        uint32_t cell_idx_y = (uint32_t)mpm->particles.position[i].y;
+        nvVector2 cell_diff = nvVector2_sub(
+            nvVector2_sub(mpm->particles.position[i], NV_VECTOR2(cell_idx_x, cell_idx_y)),
+            NV_VECTOR2(0.5f, 0.5f)
+        );
+
+        nvVector2 weights[3];
+        quadratic_kernel(mpm, i, cell_diff, weights);
+
+        float density = 0.0;
+
+        // 3x3 neighboring cells
+        for (size_t gx = 0; gx < 3; gx++) {
+            for (size_t gy = 0; gy < 3; gy++) {
+                float weight = weights[gx].x * weights[gy].y;
+
+                nvVector2 nb_cell_pos = NV_VECTOR2(
+                    (float)(cell_idx_x + gx - 1),
+                    (float)(cell_idx_y + gy - 1)
+                );
+                uint32_t nb_cell_idx = (uint32_t)nb_cell_pos.y * mpm->grid_width + (uint32_t)nb_cell_pos.x;
+
+                density += mpm->cells.mass[nb_cell_idx] * weight;
+            }
+        }
+
+        // Since this is 2d, "area" might be more correct
+        float volume = mpm->particles.mass[i] / density;
+        mpm->particles.volume0[i] = volume;
+    }
+}
+
+void MPM_step(MPM *mpm) {
+    for (size_t substep = 0; substep < mpm->substeps; substep++) {
+        MPM_clear_grid(mpm);
+        MPM_p2g(mpm);
+        MPM_grid_update(mpm);
+        MPM_g2p(mpm);
+    }
+}
+
+static inline quadratic_kernel(
+    MPM *mpm,
+    size_t i,
+    nvVector2 cell_diff,
+    nvVector2 weights[3]
+) {
+    weights[0] = nvVector2_mul(nvVector2_pow(nvVector2_sub(NV_VECTOR2(0.5f, 0.5f), cell_diff), 2.0f), 0.5f);
+    weights[1] = nvVector2_sub(NV_VECTOR2(0.75f, 0.75f), nvVector2_pow(cell_diff, 2.0f));
+    weights[2] = nvVector2_mul(nvVector2_pow(nvVector2_add(NV_VECTOR2(0.5f, 0.5f), cell_diff), 2.0f), 0.5f);
+}
+
+static void MPM_clear_grid(MPM *mpm) {
+    for (size_t i = 0; i < mpm->grid_width * mpm->grid_height; i++) {
+        mpm->cells.velocity[i] = nvVector2_zero;
+        mpm->cells.mass[i] = 0.0;
+    }
+}
+
+static void MPM_p2g(MPM *mpm) {
+    for (size_t i = 0; i < mpm->n_particles; i++) {
+
+        nvMatrix2 F = mpm->particles.F[i];
+
+        float J = nvMatrix2_determinant(F);
+        float volume = mpm->particles.volume0[i] * J;
+
+        // Useful matrices for Neo-Hookean model
+        nvMatrix2 F_T = nvMatrix2_transpose(F);
+        nvMatrix2 F_inv_T = nvMatrix2_inverse(F_T);
+        nvMatrix2 F_minus_F_inv_T = nvMatrix2_sub(F, F_inv_T);
+
+        float J_log = logf(J);
+        nvMatrix2 P_term_0 = nvMatrix2_muls(F_minus_F_inv_T, mpm->particles.elastic_mu[i]);
+        nvMatrix2 P_term_1 = nvMatrix2_muls(F_inv_T, mpm->particles.elastic_lambda[i] * J_log);
+        nvMatrix2 P = nvMatrix2_add(P_term_0, P_term_1);
+
+        // Cauchy stress
+        nvMatrix2 stress = nvMatrix2_zero;
+        if (fabsf(J) > 0.0001f) {
+            stress = nvMatrix2_muls(nvMatrix2_mulm(P, F_T), 1.0f / J);
+        }
+
+        nvMatrix2 eq_16_term_0 = nvMatrix2_muls(stress, -volume * 4.0f);
+        eq_16_term_0 = nvMatrix2_muls(eq_16_term_0, mpm->dt);
+
+        uint32_t cell_idx_x = (uint32_t)mpm->particles.position[i].x;
+        uint32_t cell_idx_y = (uint32_t)mpm->particles.position[i].y;
+        nvVector2 cell_diff = nvVector2_sub(
+            nvVector2_sub(mpm->particles.position[i], NV_VECTOR2(cell_idx_x, cell_idx_y)),
+            NV_VECTOR2(0.5f, 0.5f)
+        );
+
+        nvVector2 weights[3];
+        quadratic_kernel(mpm, i, cell_diff, weights);
+
+        // 3x3 neighboring cells
+        for (size_t gx = 0; gx < 3; gx++) {
+            for (size_t gy = 0; gy < 3; gy++) {
+                float weight = weights[gx].x * weights[gy].y;
+
+                nvVector2 nb_cell_pos = NV_VECTOR2(
+                    (float)(cell_idx_x + gx - 1),
+                    (float)(cell_idx_y + gy - 1)
+                );
+                nvVector2 nb_cell_dist = nvVector2_add(
+                    nvVector2_sub(nb_cell_pos, mpm->particles.position[i]),
+                    NV_VECTOR2(0.5f, 0.5f)
+                );
+                uint32_t nb_cell_idx = (uint32_t)nb_cell_pos.y * mpm->grid_width + (uint32_t)nb_cell_pos.x;
+
+                nvVector2 Q = nvMatrix2_mulv(mpm->particles.C[i], nb_cell_dist);
+
+                float weighted_mass = mpm->particles.mass[i] * weight;
+                mpm->cells.mass[nb_cell_idx] += weighted_mass;
+
+                mpm->cells.velocity[nb_cell_idx] = nvVector2_add(
+                    mpm->cells.velocity[nb_cell_idx],
+                    nvVector2_mul(nvVector2_add(mpm->particles.velocity[i], Q), weighted_mass)
+                );
+
+                // Fused force/momentum update from MLS-MPM
+                nvVector2 momentum = nvMatrix2_mulv(nvMatrix2_muls(eq_16_term_0, weight), nb_cell_dist);
+                mpm->cells.velocity[nb_cell_idx] = nvVector2_add(
+                    mpm->cells.velocity[nb_cell_idx],
+                    momentum
+                );
+
+                /*
+                    IMPORTANT: cell velocity currently refers to momentum, not velocity.
+                               It is reverted back to velocity in grid update step.
+                */
+            }
+        }
+    }
+}
+
+static void MPM_grid_update(MPM *mpm) {
+    for (size_t i = 0; i < mpm->grid_width * mpm->grid_height; i++) {
+        if (mpm->cells.mass[i] <= 0.0f) {
+            continue;
+        }
+
+        // Convert momentum back to velocity (and apply external forces)
+        mpm->cells.velocity[i] = nvVector2_div(mpm->cells.velocity[i], mpm->cells.mass[i]);
+        nvVector2 external = mpm->gravity;
+        mpm->cells.velocity[i] = nvVector2_add(
+            mpm->cells.velocity[i],
+            nvVector2_mul(external, mpm->dt)
+        );
+
+        // Boundary conditions
+        size_t x = i % mpm->grid_width;
+        size_t y = i / mpm->grid_width;
+        if (x < 2 || x > mpm->grid_width - 3) {
+            mpm->cells.velocity[i].x = 0.0f;
+        }
+        if (y < 2 || y > mpm->grid_height - 3) {
+            mpm->cells.velocity[i].y = 0.0f;
+        }
+    }
+}
+
+static void MPM_g2p(MPM *mpm) {
+    for (size_t i = 0; i < mpm->n_particles; i++) {
+        // Reset particle velocity because we calculate it from scratch each step
+        // using the updated grid velocities.
+        mpm->particles.velocity[i] = nvVector2_zero;
+
+        uint32_t cell_idx_x = (uint32_t)mpm->particles.position[i].x;
+        uint32_t cell_idx_y = (uint32_t)mpm->particles.position[i].y;
+        nvVector2 cell_diff = nvVector2_sub(
+            nvVector2_sub(mpm->particles.position[i], NV_VECTOR2(cell_idx_x, cell_idx_y)),
+            NV_VECTOR2(0.5f, 0.5f)
+        );
+
+        nvVector2 weights[3];
+        quadratic_kernel(mpm, i, cell_diff, weights);
+
+        // Constructing affine per-particle momentum matrix from APIC / MLS-MPM
+        nvMatrix2 B = nvMatrix2_zero;
+
+        // 3x3 neighboring cells
+        for (size_t gx = 0; gx < 3; gx++) {
+            for (size_t gy = 0; gy < 3; gy++) {
+                float weight = weights[gx].x * weights[gy].y;
+
+                nvVector2 nb_cell_pos = NV_VECTOR2(
+                    (float)(cell_idx_x + gx - 1),
+                    (float)(cell_idx_y + gy - 1)
+                );
+                nvVector2 nb_cell_dist = nvVector2_add(
+                    nvVector2_sub(nb_cell_pos, mpm->particles.position[i]),
+                    NV_VECTOR2(0.5f, 0.5f)
+                );
+                uint32_t nb_cell_idx = (uint32_t)nb_cell_pos.y * mpm->grid_width + (uint32_t)nb_cell_pos.x;
+
+                nvVector2 weighted_vel = nvVector2_mul(mpm->cells.velocity[nb_cell_idx], weight);
+
+                mpm->particles.velocity[i] = nvVector2_add(mpm->particles.velocity[i], weighted_vel);
+
+                // APIC paper eq10, constructing inner term for B
+                nvMatrix2 term = NV_MATRIX2(
+                    weighted_vel.x * nb_cell_dist.x,
+                    weighted_vel.y * nb_cell_dist.x,
+                    weighted_vel.x * nb_cell_dist.y,
+                    weighted_vel.y * nb_cell_dist.y
+                );
+
+                B = nvMatrix2_add(B, term);
+            }
+        }
+
+        // TODO: Magic number 4?
+        mpm->particles.C[i] = nvMatrix2_muls(B, 4.0f);
+
+        // Advect particles
+        mpm->particles.position[i] = nvVector2_add(
+            mpm->particles.position[i],
+            nvVector2_mul(mpm->particles.velocity[i], mpm->dt)
+        );
+
+        // Safety clamp to ensure particles don't exit domain
+        mpm->particles.position[i].x = clamp(mpm->particles.position[i].x, 1.0, mpm->grid_width-2);
+        mpm->particles.position[i].y = clamp(mpm->particles.position[i].y, 1.0, mpm->grid_height-2);
+    
+        // Deformation gradient update - MPM course, eq.181
+        nvMatrix2 Fp_new = nvMatrix2_identity;
+        Fp_new = nvMatrix2_add(Fp_new, nvMatrix2_muls(mpm->particles.C[i], mpm->dt));
+        mpm->particles.F[i] = nvMatrix2_mulm(Fp_new, mpm->particles.F[i]);
+
+        // TODO: Hacky clamp
+        if (nvMatrix2_determinant(mpm->particles.F[i]) < 0.1f) {
+            mpm->particles.F[i] = nvMatrix2_identity;
+        }
+    }
+}
+
+void MPM_apply_brush(MPM *mpm, nvVector2 position, float radius, nvVector2 rel) {
+    for (size_t i = 0; i < mpm->n_particles; i++) {
+        nvVector2 delta = nvVector2_sub(mpm->particles.position[i], position);
+        if (nvVector2_dot(delta, delta) < radius * radius) {
+            // Mode: Drag
+            nvVector2 drag = nvVector2_mul(rel, 1.0f / ((float)mpm->substeps * mpm->dt));
+            mpm->particles.velocity[i] = drag;
+            //mpm->particles.position[i] = nvVector2_add(mpm->particles.position[i], drag);
+        }
+    }
 }
