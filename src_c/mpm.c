@@ -7,6 +7,23 @@ static inline float clamp(float d, float min, float max) {
     return t > max ? max : t;
 }
 
+static void MPM_clear_grid(MPM *mpm);
+static void MPM_p2g0(MPM *mpm);
+static void MPM_p2g(MPM *mpm);
+static void MPM_grid_update(MPM *mpm);
+static void MPM_g2p(MPM *mpm);
+
+static inline quadratic_kernel(
+    MPM *mpm,
+    size_t i,
+    nvVector2 cell_diff,
+    nvVector2 weights[3]
+) {
+    weights[0] = nvVector2_mul(nvVector2_pow(nvVector2_sub(NV_VECTOR2(0.5f, 0.5f), cell_diff), 2.0f), 0.5f);
+    weights[1] = nvVector2_sub(NV_VECTOR2(0.75f, 0.75f), nvVector2_pow(cell_diff, 2.0f));
+    weights[2] = nvVector2_mul(nvVector2_pow(nvVector2_add(NV_VECTOR2(0.5f, 0.5f), cell_diff), 2.0f), 0.5f);
+}
+
 
 MPM *MPM_new(
     float hertz,
@@ -25,7 +42,7 @@ MPM *MPM_new(
     mpm->grid_width = grid_width;
     mpm->grid_height = grid_height;
 
-    mpm->gravity = NV_VECTOR2(0.0, 9.81);
+    mpm->gravity = NV_VECTOR2(0.0f, 9.81f);
 
     size_t n_cells = grid_width * grid_height;
     mpm->cells.velocity = malloc(sizeof(nvVector2) * n_cells);
@@ -33,9 +50,13 @@ MPM *MPM_new(
     mpm->cells.mass = malloc(sizeof(float) * n_cells);
     if (!(mpm->cells.mass)) return NULL;
 
+    MPM_clear_grid(mpm);
+
     mpm->max_particles = max_particles;
     mpm->n_particles = 0;
 
+    mpm->particles.material = malloc(sizeof(uint32_t) * max_particles);
+    if (!(mpm->particles.material)) return NULL;
     mpm->particles.C = malloc(sizeof(nvMatrix2) * max_particles);
     if (!(mpm->particles.C)) return NULL;
     mpm->particles.F = malloc(sizeof(nvMatrix2) * max_particles);
@@ -52,6 +73,14 @@ MPM *MPM_new(
     if (!(mpm->particles.elastic_lambda)) return NULL;
     mpm->particles.elastic_mu = malloc(sizeof(float) * max_particles);
     if (!(mpm->particles.elastic_mu)) return NULL;
+    mpm->particles.rest_density = malloc(sizeof(float) * max_particles);
+    if (!(mpm->particles.rest_density)) return NULL;
+    mpm->particles.viscosity = malloc(sizeof(float) * max_particles);
+    if (!(mpm->particles.viscosity)) return NULL;
+    mpm->particles.tait_stiffness = malloc(sizeof(float) * max_particles);
+    if (!(mpm->particles.tait_stiffness)) return NULL;
+    mpm->particles.tait_power = malloc(sizeof(float) * max_particles);
+    if (!(mpm->particles.tait_power)) return NULL;
 
     return mpm;
 }
@@ -74,7 +103,7 @@ void MPM_free(MPM *mpm) {
     free(mpm);
 }
 
-void MPM_add_particle(
+void MPM_add_elastic_particle(
     MPM *mpm,
     nvVector2 position,
     nvVector2 velocity,
@@ -84,6 +113,7 @@ void MPM_add_particle(
 ) {
     if (mpm->n_particles >= mpm->max_particles) return;
 
+    mpm->particles.material[mpm->n_particles] = 0;
     mpm->particles.position[mpm->n_particles] = position;
     mpm->particles.velocity[mpm->n_particles] = velocity;
     mpm->particles.mass[mpm->n_particles] = mass;
@@ -91,6 +121,41 @@ void MPM_add_particle(
     mpm->particles.F[mpm->n_particles] = nvMatrix2_identity;
     mpm->particles.elastic_lambda[mpm->n_particles] = elastic_lambda;
     mpm->particles.elastic_mu[mpm->n_particles] = elastic_mu;
+    mpm->particles.volume0[mpm->n_particles] = 0.0;
+
+    mpm->particles.rest_density[mpm->n_particles] = 0.0;
+    mpm->particles.viscosity[mpm->n_particles] = 0.0;
+    mpm->particles.tait_stiffness[mpm->n_particles] = 0.0;
+    mpm->particles.tait_power[mpm->n_particles] = 0.0;
+
+    mpm->n_particles++;
+}
+
+void MPM_add_fluid_particle(
+    MPM *mpm,
+    nvVector2 position,
+    nvVector2 velocity,
+    float mass,
+    float rest_density,
+    float viscosity,
+    float tait_stiffness,
+    float tait_power
+) {
+    if (mpm->n_particles >= mpm->max_particles) return;
+
+    mpm->particles.material[mpm->n_particles] = 1;
+    mpm->particles.position[mpm->n_particles] = position;
+    mpm->particles.velocity[mpm->n_particles] = velocity;
+    mpm->particles.mass[mpm->n_particles] = mass;
+    mpm->particles.C[mpm->n_particles] = nvMatrix2_zero;
+    mpm->particles.F[mpm->n_particles] = nvMatrix2_identity;
+    mpm->particles.rest_density[mpm->n_particles] = rest_density;
+    mpm->particles.viscosity[mpm->n_particles] = viscosity;
+    mpm->particles.tait_stiffness[mpm->n_particles] = tait_stiffness;
+    mpm->particles.tait_power[mpm->n_particles] = tait_power;
+
+    mpm->particles.elastic_lambda[mpm->n_particles] = 0.0;
+    mpm->particles.elastic_mu[mpm->n_particles] = 0.0;
     mpm->particles.volume0[mpm->n_particles] = 0.0;
 
     mpm->n_particles++;
@@ -101,13 +166,8 @@ void MPM_set_solver_settings(MPM *mpm, float hertz, int substeps) {
     mpm->dt = 1.0f / hertz / (float)substeps;
 }
 
-static void MPM_clear_grid(MPM *mpm);
-static void MPM_p2g(MPM *mpm);
-static void MPM_grid_update(MPM *mpm);
-static void MPM_g2p(MPM *mpm);
-
 void MPM_precalc_volume(MPM *mpm) {
-    MPM_p2g(mpm);
+    MPM_p2g0(mpm);
 
     for (size_t i = 0; i < mpm->n_particles; i++) {
         uint32_t cell_idx_x = (uint32_t)mpm->particles.position[i].x;
@@ -146,21 +206,13 @@ void MPM_precalc_volume(MPM *mpm) {
 void MPM_step(MPM *mpm) {
     for (size_t substep = 0; substep < mpm->substeps; substep++) {
         MPM_clear_grid(mpm);
+        // P2G 0 -> contribute mass
+        // P2G 1 -> contribute material
+        MPM_p2g0(mpm);
         MPM_p2g(mpm);
         MPM_grid_update(mpm);
         MPM_g2p(mpm);
     }
-}
-
-static inline quadratic_kernel(
-    MPM *mpm,
-    size_t i,
-    nvVector2 cell_diff,
-    nvVector2 weights[3]
-) {
-    weights[0] = nvVector2_mul(nvVector2_pow(nvVector2_sub(NV_VECTOR2(0.5f, 0.5f), cell_diff), 2.0f), 0.5f);
-    weights[1] = nvVector2_sub(NV_VECTOR2(0.75f, 0.75f), nvVector2_pow(cell_diff, 2.0f));
-    weights[2] = nvVector2_mul(nvVector2_pow(nvVector2_add(NV_VECTOR2(0.5f, 0.5f), cell_diff), 2.0f), 0.5f);
 }
 
 static void MPM_clear_grid(MPM *mpm) {
@@ -170,33 +222,8 @@ static void MPM_clear_grid(MPM *mpm) {
     }
 }
 
-static void MPM_p2g(MPM *mpm) {
+static void MPM_p2g0(MPM *mpm) {
     for (size_t i = 0; i < mpm->n_particles; i++) {
-
-        nvMatrix2 F = mpm->particles.F[i];
-
-        float J = nvMatrix2_determinant(F);
-        float volume = mpm->particles.volume0[i] * J;
-
-        // Useful matrices for Neo-Hookean model
-        nvMatrix2 F_T = nvMatrix2_transpose(F);
-        nvMatrix2 F_inv_T = nvMatrix2_inverse(F_T);
-        nvMatrix2 F_minus_F_inv_T = nvMatrix2_sub(F, F_inv_T);
-
-        float J_log = logf(J);
-        nvMatrix2 P_term_0 = nvMatrix2_muls(F_minus_F_inv_T, mpm->particles.elastic_mu[i]);
-        nvMatrix2 P_term_1 = nvMatrix2_muls(F_inv_T, mpm->particles.elastic_lambda[i] * J_log);
-        nvMatrix2 P = nvMatrix2_add(P_term_0, P_term_1);
-
-        // Cauchy stress
-        nvMatrix2 stress = nvMatrix2_zero;
-        if (fabsf(J) > 0.0001f) {
-            stress = nvMatrix2_muls(nvMatrix2_mulm(P, F_T), 1.0f / J);
-        }
-
-        nvMatrix2 eq_16_term_0 = nvMatrix2_muls(stress, -volume * 4.0f);
-        eq_16_term_0 = nvMatrix2_muls(eq_16_term_0, mpm->dt);
-
         uint32_t cell_idx_x = (uint32_t)mpm->particles.position[i].x;
         uint32_t cell_idx_y = (uint32_t)mpm->particles.position[i].y;
         nvVector2 cell_diff = nvVector2_sub(
@@ -206,6 +233,8 @@ static void MPM_p2g(MPM *mpm) {
 
         nvVector2 weights[3];
         quadratic_kernel(mpm, i, cell_diff, weights);
+
+        nvMatrix2 C = mpm->particles.C[i];
 
         // 3x3 neighboring cells
         for (size_t gx = 0; gx < 3; gx++) {
@@ -222,7 +251,7 @@ static void MPM_p2g(MPM *mpm) {
                 );
                 uint32_t nb_cell_idx = (uint32_t)nb_cell_pos.y * mpm->grid_width + (uint32_t)nb_cell_pos.x;
 
-                nvVector2 Q = nvMatrix2_mulv(mpm->particles.C[i], nb_cell_dist);
+                nvVector2 Q = nvMatrix2_mulv(C, nb_cell_dist);
 
                 float weighted_mass = mpm->particles.mass[i] * weight;
                 mpm->cells.mass[nb_cell_idx] += weighted_mass;
@@ -231,12 +260,129 @@ static void MPM_p2g(MPM *mpm) {
                     mpm->cells.velocity[nb_cell_idx],
                     nvVector2_mul(nvVector2_add(mpm->particles.velocity[i], Q), weighted_mass)
                 );
+            }
+        }
+    }
+}
 
-                // Fused force/momentum update from MLS-MPM
-                nvVector2 momentum = nvMatrix2_mulv(nvMatrix2_muls(eq_16_term_0, weight), nb_cell_dist);
+static void MPM_p2g(MPM *mpm) {
+    for (size_t i = 0; i < mpm->n_particles; i++) {
+        uint32_t cell_idx_x = (uint32_t)mpm->particles.position[i].x;
+        uint32_t cell_idx_y = (uint32_t)mpm->particles.position[i].y;
+        nvVector2 cell_diff = nvVector2_sub(
+            nvVector2_sub(mpm->particles.position[i], NV_VECTOR2(cell_idx_x, cell_idx_y)),
+            NV_VECTOR2(0.5f, 0.5f)
+        );
+
+        nvVector2 weights[3];
+        quadratic_kernel(mpm, i, cell_diff, weights);
+
+        // find a better name for this
+        nvMatrix2 eq_16_term_0 = nvMatrix2_zero;
+
+        // Elastic        
+        if (mpm->particles.material[i] == 0) {
+            nvMatrix2 F = mpm->particles.F[i];
+
+            float J = nvMatrix2_determinant(F);
+            float volume = mpm->particles.volume0[i] * J;
+
+            // Useful matrices for Neo-Hookean model
+            nvMatrix2 F_T = nvMatrix2_transpose(F);
+            nvMatrix2 F_inv_T = nvMatrix2_inverse(F_T);
+            nvMatrix2 F_minus_F_inv_T = nvMatrix2_sub(F, F_inv_T);
+
+            float J_log = logf(J);
+            nvMatrix2 P_term_0 = nvMatrix2_muls(F_minus_F_inv_T, mpm->particles.elastic_mu[i]);
+            nvMatrix2 P_term_1 = nvMatrix2_muls(F_inv_T, mpm->particles.elastic_lambda[i] * J_log);
+            nvMatrix2 P = nvMatrix2_add(P_term_0, P_term_1);
+
+            // Cauchy stress
+            nvMatrix2 stress = nvMatrix2_zero;
+            if (fabsf(J) > 0.0001f) {
+                stress = nvMatrix2_muls(nvMatrix2_mulm(P, F_T), 1.0f / J);
+            }
+
+            eq_16_term_0 = nvMatrix2_muls(stress, -volume * 4.0f);
+            eq_16_term_0 = nvMatrix2_muls(eq_16_term_0, mpm->dt);
+        }
+        // Fluid
+        else if (mpm->particles.material[i] == 1) {
+            // estimating particle volume by summing up neighbourhood's weighted mass contribution
+            // MPM course, equation 152
+            float density = 0.0f;
+
+            for (size_t gx = 0; gx < 3; gx++) {
+                for (size_t gy = 0; gy < 3; gy++) {
+                    float weight = weights[gx].x * weights[gy].y;
+
+                    nvVector2 nb_cell_pos = NV_VECTOR2(
+                        (float)(cell_idx_x + gx - 1),
+                        (float)(cell_idx_y + gy - 1)
+                    );
+                    uint32_t nb_cell_idx = (uint32_t)nb_cell_pos.y * mpm->grid_width + (uint32_t)nb_cell_pos.x;
+
+                    density += mpm->cells.mass[nb_cell_idx] * weight;
+                }
+            }
+
+            float volume = mpm->particles.mass[i] / density;
+
+            /*
+                Constitutive equation for isotropic fluid: 
+                stress = -pressure * I + viscosity * (velocity_gradient + velocity_gradient_transposed)
+
+                Tait equation of state for pressure
+            */
+            float eos_stiffness = 10.0f;
+            float eos_power = 4.0f;
+            float pressure = powf(density / mpm->particles.rest_density[i], mpm->particles.tait_power[i]) - 1.0f;
+            pressure *= mpm->particles.tait_stiffness[i];
+
+            // Negative pressure is clamped in Nial's article
+            if (pressure < -0.1f) pressure = -0.1f;
+
+            nvMatrix2 stress = NV_MATRIX2(
+                -pressure, 0,
+                0,         -pressure
+            );
+
+            // velocity gradient - CPIC eq. 17, where deriv of quadratic polynomial is linear
+            nvMatrix2 dudv = mpm->particles.C[i];
+            nvMatrix2 strain = dudv;
+
+            float trace = strain.m[2] + strain.m[1];
+            strain.m[1] = trace;
+            strain.m[2] = trace;
+
+            nvMatrix2 viscosity_term = nvMatrix2_muls(strain, mpm->particles.viscosity[i]);
+            stress = nvMatrix2_add(stress, viscosity_term);
+
+            eq_16_term_0 = nvMatrix2_muls(stress, -volume * 4.0f);
+            eq_16_term_0 = nvMatrix2_muls(eq_16_term_0, mpm->dt);
+        }
+
+        // 3x3 neighboring cells
+        for (size_t gx = 0; gx < 3; gx++) {
+            for (size_t gy = 0; gy < 3; gy++) {
+                float weight = weights[gx].x * weights[gy].y;
+
+                nvVector2 nb_cell_pos = NV_VECTOR2(
+                    (float)(cell_idx_x + gx - 1),
+                    (float)(cell_idx_y + gy - 1)
+                );
+                nvVector2 nb_cell_dist = nvVector2_add(
+                    nvVector2_sub(nb_cell_pos, mpm->particles.position[i]),
+                    NV_VECTOR2(0.5f, 0.5f)
+                );
+                uint32_t nb_cell_idx = (uint32_t)nb_cell_pos.y * mpm->grid_width + (uint32_t)nb_cell_pos.x;
+
+                // Fused force + momentum contribution from MLS-MPM
+                nvVector2 momentum = nvMatrix2_mulv(
+                    nvMatrix2_muls(eq_16_term_0, weight), nb_cell_dist
+                );
                 mpm->cells.velocity[nb_cell_idx] = nvVector2_add(
-                    mpm->cells.velocity[nb_cell_idx],
-                    momentum
+                    mpm->cells.velocity[nb_cell_idx], momentum
                 );
 
                 /*
@@ -267,9 +413,11 @@ static void MPM_grid_update(MPM *mpm) {
         size_t y = i / mpm->grid_width;
         if (x < 2 || x > mpm->grid_width - 3) {
             mpm->cells.velocity[i].x = 0.0f;
+            //mpm->cells.velocity[i].y *= 0.3f;
         }
         if (y < 2 || y > mpm->grid_height - 3) {
             mpm->cells.velocity[i].y = 0.0f;
+            //mpm->cells.velocity[i].x *= 0.3f;
         }
     }
 }
@@ -346,6 +494,18 @@ static void MPM_g2p(MPM *mpm) {
         if (nvMatrix2_determinant(mpm->particles.F[i]) < 0.1f) {
             mpm->particles.F[i] = nvMatrix2_identity;
         }
+
+        // Soft boundaries
+        // TODO: Predicted position needs vel * dt?
+        nvVector2 next_pos = nvVector2_add(mpm->particles.position[i], nvVector2_mul(mpm->particles.velocity[i], mpm->dt));
+        float damping = 0.75f;
+        float wmin = 3.0f;
+        float xmax = (float)mpm->grid_width - (wmin + 1.0f);
+        float ymax = (float)mpm->grid_height - (wmin + 1.0f);
+        if (next_pos.x < wmin) mpm->particles.velocity[i].x += (wmin - next_pos.x) * damping;
+        if (next_pos.y < wmin) mpm->particles.velocity[i].y += (wmin - next_pos.y) * damping;
+        if (next_pos.x > xmax) mpm->particles.velocity[i].x += (xmax - next_pos.x) * damping;
+        if (next_pos.y > ymax) mpm->particles.velocity[i].y += (ymax - next_pos.y) * damping;
     }
 }
 

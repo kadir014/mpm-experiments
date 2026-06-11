@@ -1,4 +1,4 @@
-from collections.abc import Iterator, Iterable
+from collections.abc import Iterator
 
 import _mpm
 from mpm.vector import Vector2
@@ -48,7 +48,7 @@ class MPM:
         x = int(x)
         y = int(y)
 
-        idx = y * 64 + x
+        idx = y * 100 + x
 
         vx = self._mpm.cells.velocity[idx].x
         vy = self._mpm.cells.velocity[idx].y
@@ -59,7 +59,7 @@ class MPM:
     def set_solver_settings(self, hertz: float = 60.0, substeps: int = 1) -> None:
         lib.MPM_set_solver_settings(self._mpm, hertz, substeps)
 
-    def iter_particles(self) -> Iterator[tuple[Vector2, float]]:
+    def iter_particles(self) -> Iterator[tuple[Vector2, float, int]]:
         n_particles = self._mpm.n_particles
 
         for i in range(n_particles):
@@ -68,23 +68,44 @@ class MPM:
                     self._mpm.particles.position[i].x,
                     self._mpm.particles.position[i].y
                 ),
-                self._mpm.particles.elastic_mu[i]
+                self._mpm.particles.elastic_mu[i],
+                self._mpm.particles.material[i]
             )
 
-    def add_particle(self,
+    def add_elastic_particle(self,
             position: Vector2,
             velocity: Vector2 = Vector2(0.0, 0.0),
             mass: float = 1.0,
             elastic_lambda: float = 5000.0,
             elastic_mu: float = 10000.0
             ) -> None:
-        lib.MPM_add_particle(
+        lib.MPM_add_elastic_particle(
             self._mpm,
             (position.x, position.y),
             (velocity.x, velocity.y),
             mass,
             elastic_lambda,
             elastic_mu
+        )
+
+    def add_fluid_particle(self,
+            position: Vector2,
+            velocity: Vector2 = Vector2(0.0, 0.0),
+            mass: float = 1.0,
+            rest_density: float = 2.0,
+            viscosity: float = 0.0,
+            tait_stiffness: float = 185.0,
+            tait_power: float = 6.0
+            ) -> None:
+        lib.MPM_add_fluid_particle(
+            self._mpm,
+            (position.x, position.y),
+            (velocity.x, velocity.y),
+            mass,
+            rest_density,
+            viscosity,
+            tait_stiffness,
+            tait_power
         )
 
     def precalc_volume(self) -> None:

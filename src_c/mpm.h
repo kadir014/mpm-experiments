@@ -13,9 +13,14 @@ typedef struct {
     nvVector2 *position;
     nvVector2 *velocity;
     float *mass;
+    uint32_t *material;
     float *volume0;
     float *elastic_lambda;
     float *elastic_mu;
+    float *rest_density;
+    float *viscosity;
+    float *tait_stiffness;
+    float *tait_power;
 } Particles;
 
 typedef struct {
@@ -46,13 +51,24 @@ MPM *MPM_new(
 
 void MPM_free(MPM *mpm);
 
-void MPM_add_particle(
+void MPM_add_elastic_particle(
     MPM *mpm,
     nvVector2 position,
     nvVector2 velocity,
     float mass,
     float elastic_lambda,
     float elastic_mu
+);
+
+void MPM_add_fluid_particle(
+    MPM *mpm,
+    nvVector2 position,
+    nvVector2 velocity,
+    float mass,
+    float rest_density,
+    float viscosity,
+    float tait_stiffness,
+    float tait_power
 );
 
 void MPM_precalc_volume(MPM *mpm);
