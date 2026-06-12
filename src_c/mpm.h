@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "vector.h"
 #include "matrix.h"
+#include "profiler.h"
 
 
 typedef struct {
@@ -13,6 +14,7 @@ typedef struct {
     nvVector2 *position;
     nvVector2 *velocity;
     float *mass;
+    float *gravity_scale;
     uint32_t *material;
     float *volume0;
     float *elastic_lambda;
@@ -39,6 +41,8 @@ typedef struct {
 
     size_t n_particles;
     size_t max_particles;
+
+    nvProfiler profiler;
 } MPM;
 
 MPM *MPM_new(
@@ -56,6 +60,7 @@ void MPM_add_elastic_particle(
     nvVector2 position,
     nvVector2 velocity,
     float mass,
+    float gravity_scale,
     float elastic_lambda,
     float elastic_mu
 );
@@ -65,11 +70,14 @@ void MPM_add_fluid_particle(
     nvVector2 position,
     nvVector2 velocity,
     float mass,
+    float gravity_scale,
     float rest_density,
     float viscosity,
     float tait_stiffness,
     float tait_power
 );
+
+void MPM_clear(MPM *mpm);
 
 void MPM_precalc_volume(MPM *mpm);
 
@@ -78,6 +86,14 @@ void MPM_set_solver_settings(MPM *mpm, float hertz, int substeps);
 void MPM_step(MPM *mpm);
 
 void MPM_apply_brush(MPM *mpm, nvVector2 position, float radius, nvVector2 rel);
+
+void MPM_get_particle_view(
+    MPM *mpm,
+    char *target,
+    float zoom,
+    size_t width,
+    size_t height
+);
 
 
 #endif // NOVAPHYSICS_MPM_H

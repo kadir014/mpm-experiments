@@ -22,14 +22,23 @@ def generate_cdef() -> None:
     """ Generate cdef header. """
     
     cdef_source = """
-    typedef struct {
-        float x;
-        float y;
-    } nvVector2;
+typedef struct {
+    float x;
+    float y;
+} nvVector2;
 
-    typedef struct {
-        float m[4];
-    } nvMatrix2;
+typedef struct {
+    float m[4];
+} nvMatrix2;
+
+typedef struct {
+    double step;
+    double clear_grid;
+    double p2g0;
+    double p2g1;
+    double update_grid;
+    double g2p;
+} nvProfiler;
     """
 
     bracket = 0

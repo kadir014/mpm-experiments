@@ -17,6 +17,8 @@ classifiers = [
 ]
 dependencies = [
     "cffi >= 1.17.0",
+    "miniprofiler",
+    "moderngl"
 ]
 requires-python = ">=3.12"
 

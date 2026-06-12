@@ -14,8 +14,6 @@ static void MPM_grid_update(MPM *mpm);
 static void MPM_g2p(MPM *mpm);
 
 static inline void quadratic_kernel(
-    MPM *mpm,
-    size_t i,
     nvVector2 cell_diff,
     nvVector2 weights[3]
 ) {
@@ -67,6 +65,8 @@ MPM *MPM_new(
     if (!(mpm->particles.velocity)) return NULL;
     mpm->particles.mass = malloc(sizeof(float) * max_particles);
     if (!(mpm->particles.mass)) return NULL;
+    mpm->particles.gravity_scale = malloc(sizeof(float) * max_particles);
+    if (!(mpm->particles.gravity_scale)) return NULL;
     mpm->particles.volume0 = malloc(sizeof(float) * max_particles);
     if (!(mpm->particles.volume0)) return NULL;
     mpm->particles.elastic_lambda = malloc(sizeof(float) * max_particles);
@@ -82,6 +82,8 @@ MPM *MPM_new(
     mpm->particles.tait_power = malloc(sizeof(float) * max_particles);
     if (!(mpm->particles.tait_power)) return NULL;
 
+    nvProfiler_reset(&mpm->profiler);
+
     return mpm;
 }
 
@@ -96,6 +98,7 @@ void MPM_free(MPM *mpm) {
     free(mpm->particles.position);
     free(mpm->particles.velocity);
     free(mpm->particles.mass);
+    free(mpm->particles.gravity_scale);
     free(mpm->particles.volume0);
     free(mpm->particles.elastic_lambda);
     free(mpm->particles.elastic_mu);
@@ -108,6 +111,7 @@ void MPM_add_elastic_particle(
     nvVector2 position,
     nvVector2 velocity,
     float mass,
+    float gravity_scale,
     float elastic_lambda,
     float elastic_mu
 ) {
@@ -117,6 +121,7 @@ void MPM_add_elastic_particle(
     mpm->particles.position[mpm->n_particles] = position;
     mpm->particles.velocity[mpm->n_particles] = velocity;
     mpm->particles.mass[mpm->n_particles] = mass;
+    mpm->particles.gravity_scale[mpm->n_particles] = gravity_scale;
     mpm->particles.C[mpm->n_particles] = nvMatrix2_zero;
     mpm->particles.F[mpm->n_particles] = nvMatrix2_identity;
     mpm->particles.elastic_lambda[mpm->n_particles] = elastic_lambda;
@@ -136,6 +141,7 @@ void MPM_add_fluid_particle(
     nvVector2 position,
     nvVector2 velocity,
     float mass,
+    float gravity_scale,
     float rest_density,
     float viscosity,
     float tait_stiffness,
@@ -147,6 +153,7 @@ void MPM_add_fluid_particle(
     mpm->particles.position[mpm->n_particles] = position;
     mpm->particles.velocity[mpm->n_particles] = velocity;
     mpm->particles.mass[mpm->n_particles] = mass;
+    mpm->particles.gravity_scale[mpm->n_particles] = gravity_scale;
     mpm->particles.C[mpm->n_particles] = nvMatrix2_zero;
     mpm->particles.F[mpm->n_particles] = nvMatrix2_identity;
     mpm->particles.rest_density[mpm->n_particles] = rest_density;
@@ -159,6 +166,11 @@ void MPM_add_fluid_particle(
     mpm->particles.volume0[mpm->n_particles] = 0.0;
 
     mpm->n_particles++;
+}
+
+void MPM_clear(MPM *mpm) {
+    MPM_clear_grid(mpm);
+    mpm->n_particles = 0;
 }
 
 void MPM_set_solver_settings(MPM *mpm, float hertz, int substeps) {
@@ -178,7 +190,7 @@ void MPM_precalc_volume(MPM *mpm) {
         );
 
         nvVector2 weights[3];
-        quadratic_kernel(mpm, i, cell_diff, weights);
+        quadratic_kernel(cell_diff, weights);
 
         float density = 0.0;
 
@@ -203,16 +215,43 @@ void MPM_precalc_volume(MPM *mpm) {
     }
 }
 
+#define TIMER_START nvPrecisionTimer_start(&timer)
+#define TIMER_STOP(field) mpm->profiler.field += nvPrecisionTimer_stop(&timer);
+
 void MPM_step(MPM *mpm) {
+    nvProfiler_reset(&mpm->profiler);
+
+    nvPrecisionTimer step_timer;
+    nvPrecisionTimer_start(&step_timer);
+
     for (size_t substep = 0; substep < mpm->substeps; substep++) {
+        nvPrecisionTimer timer;
+
+        TIMER_START;
         MPM_clear_grid(mpm);
+        TIMER_STOP(clear_grid);
+
         // P2G 0 -> contribute mass
         // P2G 1 -> contribute material
+
+        TIMER_START;
         MPM_p2g0(mpm);
+        TIMER_STOP(p2g0);
+
+        TIMER_START;
         MPM_p2g(mpm);
+        TIMER_STOP(p2g1);
+
+        TIMER_START;
         MPM_grid_update(mpm);
+        TIMER_STOP(update_grid);
+
+        TIMER_START;
         MPM_g2p(mpm);
+        TIMER_STOP(g2p);
     }
+
+    mpm->profiler.step += nvPrecisionTimer_stop(&step_timer);
 }
 
 static void MPM_clear_grid(MPM *mpm) {
@@ -232,7 +271,7 @@ static void MPM_p2g0(MPM *mpm) {
         );
 
         nvVector2 weights[3];
-        quadratic_kernel(mpm, i, cell_diff, weights);
+        quadratic_kernel(cell_diff, weights);
 
         nvMatrix2 C = mpm->particles.C[i];
 
@@ -275,7 +314,7 @@ static void MPM_p2g(MPM *mpm) {
         );
 
         nvVector2 weights[3];
-        quadratic_kernel(mpm, i, cell_diff, weights);
+        quadratic_kernel(cell_diff, weights);
 
         // find a better name for this
         nvMatrix2 eq_16_term_0 = nvMatrix2_zero;
@@ -375,6 +414,12 @@ static void MPM_p2g(MPM *mpm) {
                 );
                 uint32_t nb_cell_idx = (uint32_t)nb_cell_pos.y * mpm->grid_width + (uint32_t)nb_cell_pos.x;
 
+                // "Fake" smoke buoyancy
+                mpm->cells.velocity[nb_cell_idx] = nvVector2_add(
+                    mpm->cells.velocity[nb_cell_idx],
+                    nvVector2_mul(mpm->gravity, (mpm->particles.gravity_scale[i] * weight * mpm->dt))
+                );
+
                 // Fused force + momentum contribution from MLS-MPM
                 nvVector2 momentum = nvMatrix2_mulv(
                     nvMatrix2_muls(eq_16_term_0, weight), nb_cell_dist
@@ -417,6 +462,12 @@ static void MPM_grid_update(MPM *mpm) {
             mpm->cells.velocity[i].y = 0.0f;
             //mpm->cells.velocity[i].x *= 0.3f;
         }
+
+        // Degenerate velocities
+        float degen = 350.0f;
+        if (nvVector2_dot(mpm->cells.velocity[i], mpm->cells.velocity[i]) > degen * degen) {
+            mpm->cells.velocity[i] = nvVector2_zero;
+        }
     }
 }
 
@@ -434,7 +485,7 @@ static void MPM_g2p(MPM *mpm) {
         );
 
         nvVector2 weights[3];
-        quadratic_kernel(mpm, i, cell_diff, weights);
+        quadratic_kernel(cell_diff, weights);
 
         // Constructing affine per-particle momentum matrix from APIC / MLS-MPM
         nvMatrix2 B = nvMatrix2_zero;
@@ -516,5 +567,34 @@ void MPM_apply_brush(MPM *mpm, nvVector2 position, float radius, nvVector2 rel) 
             mpm->particles.velocity[i] = drag;
             //mpm->particles.position[i] = nvVector2_add(mpm->particles.position[i], drag);
         }
+    }
+}
+
+void MPM_get_particle_view(
+    MPM *mpm,
+    char *target,
+    float zoom,
+    size_t width,
+    size_t height
+) {
+    for (size_t i = 0; i < mpm->n_particles; i++) {
+        nvVector2 pos = mpm->particles.position[i];
+        
+        // world -> screen
+        pos.x *= zoom;
+        pos.y *= zoom;
+
+        // screen -> ndc
+        pos.x = pos.x / (float)width * 2.0f - 1.0f;
+        pos.y = ((float)height - pos.y) / (float)height * 2.0f - 1.0f;
+
+        // TODO: Which is faster? memcpy or casting to float array?
+        // size_t offset = i * sizeof(float) * 2;
+        // memcpy(target + offset, &pos.x, sizeof(float));
+        // memcpy(target + offset + sizeof(float), &pos.y, sizeof(float));
+
+        float *out = (float *)target;
+        out[i * 2 + 0] = pos.x;
+        out[i * 2 + 1] = pos.y;
     }
 }
