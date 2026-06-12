@@ -89,7 +89,9 @@ void MPM_apply_brush(MPM *mpm, nvVector2 position, float radius, nvVector2 rel);
 
 void MPM_get_particle_view(
     MPM *mpm,
-    char *target,
+    char *out_position,
+    char *out_velocity,
+    char *out_material,
     float zoom,
     size_t width,
     size_t height

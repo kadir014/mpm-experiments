@@ -572,13 +572,16 @@ void MPM_apply_brush(MPM *mpm, nvVector2 position, float radius, nvVector2 rel) 
 
 void MPM_get_particle_view(
     MPM *mpm,
-    char *target,
+    char *out_position,
+    char *out_velocity,
+    char *out_material,
     float zoom,
     size_t width,
     size_t height
 ) {
     for (size_t i = 0; i < mpm->n_particles; i++) {
         nvVector2 pos = mpm->particles.position[i];
+        nvVector2 vel = mpm->particles.velocity[i];
         
         // world -> screen
         pos.x *= zoom;
@@ -593,8 +596,15 @@ void MPM_get_particle_view(
         // memcpy(target + offset, &pos.x, sizeof(float));
         // memcpy(target + offset + sizeof(float), &pos.y, sizeof(float));
 
-        float *out = (float *)target;
-        out[i * 2 + 0] = pos.x;
-        out[i * 2 + 1] = pos.y;
+        float *cout_position = (float *)out_position;
+        cout_position[i * 2 + 0] = pos.x;
+        cout_position[i * 2 + 1] = pos.y;
+
+        float *cout_velocity = (float *)out_velocity;
+        cout_velocity[i * 2 + 0] = vel.x;
+        cout_velocity[i * 2 + 1] = vel.y;
+
+        uint32_t *cout_material = (uint32_t *)out_material;
+        cout_material[i] = mpm->particles.material[i];
     }
 }

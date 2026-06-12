@@ -153,9 +153,23 @@ class MPM:
     def apply_brush(self, position: Vector2, radius: float, rel: Vector2) -> None:
         lib.MPM_apply_brush(self._mpm, (position.x, position.y), radius, (rel.x, rel.y))
 
-    def get_particle_view(self, zoom: float, width: int, height: int) -> bytes:
-        target = bytes([0 for _ in range(self.n_particles * 4 * 2)])
+    def get_particle_view(self,
+            zoom: float,
+            width: int,
+            height: int
+            ) -> tuple[bytes, bytes, bytes]:
+        out_position = bytes([0 for _ in range(self.n_particles * 4 * 2)])
+        out_velocity = bytes([0 for _ in range(self.n_particles * 4 * 2)])
+        out_material = bytes([0 for _ in range(self.n_particles * 4 * 2)])
 
-        lib.MPM_get_particle_view(self._mpm, target, zoom, width, height)
+        lib.MPM_get_particle_view(
+            self._mpm,
+            out_position,
+            out_velocity,
+            out_material,
+            zoom,
+            width,
+            height
+        )
 
-        return target
+        return (out_position, out_velocity, out_material)

@@ -184,7 +184,7 @@ while is_running:
     pmouse_rel = pygame.Vector2(*pygame.mouse.get_rel()) / ZOOM
 
     if keys[pygame.K_q]:
-        if frame_n >= 3:
+        if frame_n >= 7:
             frame_n = 0
             spawn(pmouse-pygame.Vector2(5, 5), (10, 10), mass=1.0)
 
@@ -220,6 +220,8 @@ while is_running:
 
         # for x in range(100 + 1):
         #     pygame.draw.line(window, (240, 240, 240), (x * ZOOM, 0), (x * ZOOM, 100 * ZOOM), 1)
+
+        pygame.draw.rect(window, (240, 240, 240), (0, 0, 100 * ZOOM, 100 * ZOOM), 1)
 
         if pygame.mouse.get_pressed()[2]:
             pygame.draw.circle(window, (160, 255, 90), mouse, BRUSH_RADIUS * ZOOM, 1)
@@ -270,9 +272,11 @@ while is_running:
         screenquad.render()
 
         particles_view = sim.get_particle_view(ZOOM, WINDOW_WIDTH, WINDOW_HEIGHT)
-        particles_gl._vbo.write(particles_view)
+        particles_gl.pos_buffer.write(particles_view[0])
+        particles_gl.vel_buffer.write(particles_view[1])
+        particles_gl.mat_buffer.write(particles_view[2])
 
-        ctx.point_size = 5
+        ctx.point_size = 7
         particles_gl.render(sim.n_particles)
 
         pygame.display.flip()

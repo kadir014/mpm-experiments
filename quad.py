@@ -87,14 +87,19 @@ class Particles:
         self._ctx = ctx
 
         # max_particles * sizeof(float) * 2
-        self._vbo = ctx.buffer(reserve=100000*4*2, dynamic=True)
+        max_particles = 100_000
+        self.pos_buffer = ctx.buffer(reserve=max_particles * 4 * 2, dynamic=True)
+        self.vel_buffer = ctx.buffer(reserve=max_particles * 4 * 2, dynamic=True)
+        self.mat_buffer = ctx.buffer(reserve=max_particles * 4, dynamic=True)
 
         self.load_program(vertex_shader, fragment_shader)
 
         self.vao = self._ctx.vertex_array(
             self.program,
             (
-                (self._vbo, "2f", "in_position"),
+                (self.pos_buffer, "2f", "in_position"),
+                (self.vel_buffer, "2f", "in_velocity"),
+                (self.mat_buffer, "1u", "in_material")
             )
         )
 
