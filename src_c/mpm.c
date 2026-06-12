@@ -13,7 +13,7 @@ static void MPM_p2g(MPM *mpm);
 static void MPM_grid_update(MPM *mpm);
 static void MPM_g2p(MPM *mpm);
 
-static inline quadratic_kernel(
+static inline void quadratic_kernel(
     MPM *mpm,
     size_t i,
     nvVector2 cell_diff,
@@ -27,9 +27,9 @@ static inline quadratic_kernel(
 
 MPM *MPM_new(
     float hertz,
-    int substeps,
-    int grid_width,
-    int grid_height,
+    size_t substeps,
+    size_t grid_width,
+    size_t grid_height,
     size_t max_particles
 ) {
     MPM *mpm = malloc(sizeof(MPM));
@@ -334,8 +334,6 @@ static void MPM_p2g(MPM *mpm) {
 
                 Tait equation of state for pressure
             */
-            float eos_stiffness = 10.0f;
-            float eos_power = 4.0f;
             float pressure = powf(density / mpm->particles.rest_density[i], mpm->particles.tait_power[i]) - 1.0f;
             pressure *= mpm->particles.tait_stiffness[i];
 

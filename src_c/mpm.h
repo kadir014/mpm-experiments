@@ -31,11 +31,11 @@ typedef struct {
 typedef struct {
     Particles particles;
     Cells cells;
-    int grid_width;
-    int grid_height;
+    size_t grid_width;
+    size_t grid_height;
     nvVector2 gravity;
     float dt;
-    int substeps;
+    size_t substeps;
 
     size_t n_particles;
     size_t max_particles;
@@ -43,9 +43,9 @@ typedef struct {
 
 MPM *MPM_new(
     float hertz,
-    int substeps,
-    int grid_width,
-    int grid_height,
+    size_t substeps,
+    size_t grid_width,
+    size_t grid_height,
     size_t max_particles
 );
 
