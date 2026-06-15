@@ -14,10 +14,12 @@ from quad import Quad, Particles
 
 WINDOW_SIZE = WINDOW_WIDTH, WINDOW_HEIGHT = 1280, 720
 MAX_FPS = 60
-ZOOM = 7.2
+ZOOM = 7.0
 
 BRUSH_RADIUS = 3.5 * 3
-DRAW_RADIUS = 30
+DRAW_RADIUS = 15
+
+OFFSET = (7, 7)
 
 
 # Thanks to DD for desktop scaling fix on linux
@@ -53,7 +55,9 @@ sim = mpm.MPM((100, 100), hertz=40.0, substeps=6)
 #sim.gravity = mpm.Vector2(0.0, 3.0)
 sim.gravity = mpm.Vector2(0.0, 9.81) * 2.3
 
-def spawn(sp: pygame.Vector2, size: tuple[int, int], e: float = 15000.0, mass: float = 1.0, material: int = 1) -> None:
+sim._mpm.boundary_friction = 0.7
+
+def spawn(sp: pygame.Vector2, size: tuple[int, int], e: float = 15000.0, mass: float = 1.0, material: int = 1, vel: pygame.Vector2 = pygame.Vector2()) -> None:
     for y in range(size[1]):
         # if (y+0) % 6 < 3:
         #     continue
@@ -67,6 +71,7 @@ def spawn(sp: pygame.Vector2, size: tuple[int, int], e: float = 15000.0, mass: f
             #p += pygame.Vector2(uniform(-r, r), uniform(-r, r))
             v = pygame.Vector2(uniform(-1, 1), uniform(-1, 1)) * 40
             v = pygame.Vector2()
+            v += vel
             # if uniform(0, 1) <= 0.5:
             #     e=10000
             # else:
@@ -114,6 +119,9 @@ drawsurf = pygame.Surface((100 * ZOOM, 100*ZOOM))
 
 frame_n = 0
 
+stamp_img = pygame.transform.smoothscale_by(pygame.image.load("assets/pygamecelogo.webp"), 0.3).convert_alpha()
+is_stamping = False
+
 while is_running:
     dt = clock.tick(MAX_FPS) * 0.001
 
@@ -131,6 +139,9 @@ while is_running:
             elif event.key == pygame.K_c:
                 sim.clear()
 
+            elif event.key == pygame.K_s:
+                is_stamping = True
+
             elif event.key == pygame.K_F1:
                 max_mass = -float("inf")
                 for y in range(100):
@@ -141,6 +152,51 @@ while is_running:
                         if mass > max_mass:
                             max_mass = mass
                 print("max mass:", max_mass)
+
+        elif event.type == pygame.KEYUP:
+            if event.key == pygame.K_s:
+                if is_stamping:
+                    # for multisampling
+                    grow = 60
+                    growh = int(grow * 0.5)
+                    inflated = pygame.Surface(stamp_img.get_rect().inflate(grow, grow).size, flags=pygame.SRCALPHA)
+                    inflated.fill((255, 255, 255, 0))
+                    inflated.blit(stamp_img, (growh, growh))
+
+                    res = 1.5
+                    for y in range(round(100 * res)):
+                        y /= res
+                        for x in range(round(100 * res)):
+                            x /= res
+                            p = pygame.Vector2(x, y) * ZOOM
+
+                            if not pygame.Rect(mouse, stamp_img.get_size()).collidepoint(p):
+                                continue
+
+                            p -= mouse
+                            
+                            # 1-pixel sample
+                            # c = stamp_img.get_at(p)
+
+                            # sample area
+                            s = 5
+                            sub = inflated.subsurface((p.x-s/2+growh, p.y-s/2+growh, s, s))
+                            c = pygame.Color(pygame.transform.average_color(sub))
+
+                            if c.a > 25:
+                                # The shader skips full black (0, 0, 0)
+                                if c.r == 0 and c.g == 0 and c.b == 0:
+                                    c.b = 1
+
+                                r = 0.1
+                                ppos = mpm.Vector2(x, y)
+                                ppos += pygame.Vector2(uniform(-r, r), uniform(-r, r))
+                                ppos -= pygame.Vector2(OFFSET) / ZOOM
+                                sim.add_elastic_particle(ppos, mass=1.0, elastic_lambda=5000, elastic_mu=15000, user_color=(c.r, c.g, c.b))
+
+                    sim.precalc_volume()
+
+                is_stamping = False
         
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:
@@ -164,6 +220,7 @@ while is_running:
                             r = 0.1
                             ppos = mpm.Vector2(x, y)
                             ppos += pygame.Vector2(uniform(-r, r), uniform(-r, r))
+                            ppos -= pygame.Vector2(OFFSET) / ZOOM
                             sim.add_elastic_particle(ppos, mass=1.0, elastic_lambda=5000, elastic_mu=15000)
 
                         # for i in range(len(trail)-1):
@@ -184,9 +241,10 @@ while is_running:
     pmouse_rel = pygame.Vector2(*pygame.mouse.get_rel()) / ZOOM
 
     if keys[pygame.K_q]:
-        if frame_n >= 7:
+        if frame_n >= 5:
             frame_n = 0
-            spawn(pmouse-pygame.Vector2(5, 5), (10, 10), mass=1.0)
+            r = pygame.Vector2(uniform(-0.3, 0.3), uniform(-0.3, 0.3))
+            spawn(pmouse-pygame.Vector2(5, 5)+r, (10, 10), mass=1.5, vel=pygame.Vector2(0,80))
 
     brushengine.update()
 
@@ -201,6 +259,35 @@ while is_running:
         window.fill((255, 255, 255))
         drawsurf.fill((255, 255, 255))
 
+        for y in range(1, 100):
+            pygame.draw.line(
+                window,
+                (240, 240, 240),
+                (OFFSET[0], OFFSET[1] + y * ZOOM),
+                (OFFSET[0] + 100 * ZOOM, OFFSET[1] + y * ZOOM),
+                1
+            )
+
+        for x in range(1, 100):
+            pygame.draw.line(
+                window,
+                (240, 240, 240),
+                (OFFSET[0] + x * ZOOM, OFFSET[1]),
+                (OFFSET[0] + x * ZOOM, OFFSET[1] + 100 * ZOOM),
+                1
+            )
+
+        pygame.draw.rect(
+            window,
+            (205, 205, 205),
+            (OFFSET[0], OFFSET[1], int(100 * ZOOM) + 1, int(100 * ZOOM) + 1),
+            1,
+            border_radius=7
+        )
+
+        if is_stamping:
+            window.blit(stamp_img, mouse)
+
         # for y in range(100):
         #     for x in range(100):
         #         cell = sim.cell(x, y)
@@ -208,20 +295,15 @@ while is_running:
         #         vel = pygame.Vector2(cell[0].to_tuple())
 
         #         if mass > 0:
-        #             l = pygame.math.clamp(mass * 55, 0, 50)
-        #             h = (int(mass * 25.0) - 100) % 360
+        #             #l = pygame.math.clamp(mass * 55, 0, 50)
+        #             #h = (int(mass * 25.0) - 100) % 360
         #             #h = int(vel.length() / 1.0) % 360
-        #             color = pygame.Color.from_hsla((h, 100, 100 - l, 100))
+        #             #color = pygame.Color.from_hsla((h, 100, 100 - l, 100))
 
-        #             window.fill(color, (int(x*ZOOM), int(y*ZOOM), ceil(ZOOM), ceil(ZOOM)))
+        #             #window.fill(color, (int(x*ZOOM), int(y*ZOOM), ceil(ZOOM), ceil(ZOOM)))
 
-        # for y in range(100 + 1):
-        #     pygame.draw.line(window, (240, 240, 240), (0, y * ZOOM), (100 * ZOOM, y * ZOOM), 1)
-
-        # for x in range(100 + 1):
-        #     pygame.draw.line(window, (240, 240, 240), (x * ZOOM, 0), (x * ZOOM, 100 * ZOOM), 1)
-
-        pygame.draw.rect(window, (240, 240, 240), (0, 0, 100 * ZOOM, 100 * ZOOM), 1)
+        #             pos = pygame.Vector2(x, y) * ZOOM + pygame.Vector2(OFFSET)
+        #             pygame.draw.line(window, (255, 0, 0), pos, pos+vel*0.3, 1)
 
         if pygame.mouse.get_pressed()[2]:
             pygame.draw.circle(window, (160, 255, 90), mouse, BRUSH_RADIUS * ZOOM, 1)
@@ -239,8 +321,8 @@ while is_running:
 
         #     pygame.draw.circle(window, color, (p[0] * ZOOM).to_tuple(), 3)
 
-        #fblits_seq = [((particle_surf2, particle_surf)[p[2] == 1], (p[0] * ZOOM).to_tuple()) for p in sim.iter_particles()]
-        #window.fblits(fblits_seq)
+        # fblits_seq = [((particle_surf2, particle_surf)[p[2] == 1], (p[0] * ZOOM + mpm.Vector2(15, 15)).to_tuple()) for p in sim.iter_particles()]
+        # window.fblits(fblits_seq)
 
         brush.draw_stroke(window, (0, 0, 0), brushengine.raw_trail, DRAW_RADIUS)
         brush.draw_stroke(drawsurf, (0, 0, 0), brushengine.raw_trail, DRAW_RADIUS)
@@ -271,10 +353,11 @@ while is_running:
         screenquad.update_texture(window)
         screenquad.render()
 
-        particles_view = sim.get_particle_view(ZOOM, WINDOW_WIDTH, WINDOW_HEIGHT)
+        particles_view = sim.get_particle_view(ZOOM, OFFSET, WINDOW_WIDTH, WINDOW_HEIGHT)
         particles_gl.pos_buffer.write(particles_view[0])
         particles_gl.vel_buffer.write(particles_view[1])
         particles_gl.mat_buffer.write(particles_view[2])
+        particles_gl.col_buffer.write(particles_view[3])
 
         ctx.point_size = 7
         particles_gl.render(sim.n_particles)

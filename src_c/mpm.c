@@ -50,6 +50,8 @@ MPM *MPM_new(
 
     MPM_clear_grid(mpm);
 
+    mpm->boundary_friction = 0.5f;
+
     mpm->max_particles = max_particles;
     mpm->n_particles = 0;
 
@@ -81,6 +83,8 @@ MPM *MPM_new(
     if (!(mpm->particles.tait_stiffness)) return NULL;
     mpm->particles.tait_power = malloc(sizeof(float) * max_particles);
     if (!(mpm->particles.tait_power)) return NULL;
+    mpm->particles.user_color = malloc(sizeof(UserColor) * max_particles);
+    if (!(mpm->particles.user_color)) return NULL;
 
     nvProfiler_reset(&mpm->profiler);
 
@@ -113,9 +117,13 @@ void MPM_add_elastic_particle(
     float mass,
     float gravity_scale,
     float elastic_lambda,
-    float elastic_mu
+    float elastic_mu,
+    UserColor user_color
 ) {
     if (mpm->n_particles >= mpm->max_particles) return;
+
+    if (position.x <= 1.0f || position.x > (float)mpm->grid_width - 1.0f) return;
+    if (position.y <= 1.0f || position.y > (float)mpm->grid_height - 1.0f) return;
 
     mpm->particles.material[mpm->n_particles] = 0;
     mpm->particles.position[mpm->n_particles] = position;
@@ -133,6 +141,8 @@ void MPM_add_elastic_particle(
     mpm->particles.tait_stiffness[mpm->n_particles] = 0.0;
     mpm->particles.tait_power[mpm->n_particles] = 0.0;
 
+    mpm->particles.user_color[mpm->n_particles] = user_color;
+
     mpm->n_particles++;
 }
 
@@ -145,9 +155,13 @@ void MPM_add_fluid_particle(
     float rest_density,
     float viscosity,
     float tait_stiffness,
-    float tait_power
+    float tait_power,
+    UserColor user_color
 ) {
     if (mpm->n_particles >= mpm->max_particles) return;
+
+    if (position.x <= 1.0f || position.x > (float)mpm->grid_width - 1.0f) return;
+    if (position.y <= 1.0f || position.y > (float)mpm->grid_height - 1.0f) return;
 
     mpm->particles.material[mpm->n_particles] = 1;
     mpm->particles.position[mpm->n_particles] = position;
@@ -164,6 +178,8 @@ void MPM_add_fluid_particle(
     mpm->particles.elastic_lambda[mpm->n_particles] = 0.0;
     mpm->particles.elastic_mu[mpm->n_particles] = 0.0;
     mpm->particles.volume0[mpm->n_particles] = 0.0;
+
+    mpm->particles.user_color[mpm->n_particles] = user_color;
 
     mpm->n_particles++;
 }
@@ -203,6 +219,9 @@ void MPM_precalc_volume(MPM *mpm) {
                     (float)(cell_idx_x + gx - 1),
                     (float)(cell_idx_y + gy - 1)
                 );
+
+                if (nb_cell_pos.x < 0.0f || nb_cell_pos.y < 0.0f || nb_cell_pos.x > (float)mpm->grid_width - 1.0f || nb_cell_pos.y > (float)mpm->grid_height - 1.0f) continue;
+
                 uint32_t nb_cell_idx = (uint32_t)nb_cell_pos.y * mpm->grid_width + (uint32_t)nb_cell_pos.x;
 
                 density += mpm->cells.mass[nb_cell_idx] * weight;
@@ -284,6 +303,7 @@ static void MPM_p2g0(MPM *mpm) {
                     (float)(cell_idx_x + gx - 1),
                     (float)(cell_idx_y + gy - 1)
                 );
+                if (nb_cell_pos.x < 0.0f || nb_cell_pos.y < 0.0f || nb_cell_pos.x > (float)mpm->grid_width - 1.0f || nb_cell_pos.y > (float)mpm->grid_height - 1.0f) continue;
                 nvVector2 nb_cell_dist = nvVector2_add(
                     nvVector2_sub(nb_cell_pos, mpm->particles.position[i]),
                     NV_VECTOR2(0.5f, 0.5f)
@@ -359,6 +379,7 @@ static void MPM_p2g(MPM *mpm) {
                         (float)(cell_idx_x + gx - 1),
                         (float)(cell_idx_y + gy - 1)
                     );
+                    if (nb_cell_pos.x < 0.0f || nb_cell_pos.y < 0.0f || nb_cell_pos.x > (float)mpm->grid_width - 1.0f || nb_cell_pos.y > (float)mpm->grid_height - 1.0f) continue;
                     uint32_t nb_cell_idx = (uint32_t)nb_cell_pos.y * mpm->grid_width + (uint32_t)nb_cell_pos.x;
 
                     density += mpm->cells.mass[nb_cell_idx] * weight;
@@ -408,6 +429,7 @@ static void MPM_p2g(MPM *mpm) {
                     (float)(cell_idx_x + gx - 1),
                     (float)(cell_idx_y + gy - 1)
                 );
+                if (nb_cell_pos.x < 0.0f || nb_cell_pos.y < 0.0f || nb_cell_pos.x > (float)mpm->grid_width - 1.0f || nb_cell_pos.y > (float)mpm->grid_height - 1.0f) continue;
                 nvVector2 nb_cell_dist = nvVector2_add(
                     nvVector2_sub(nb_cell_pos, mpm->particles.position[i]),
                     NV_VECTOR2(0.5f, 0.5f)
@@ -452,19 +474,31 @@ static void MPM_grid_update(MPM *mpm) {
         );
 
         // Boundary conditions
+        // TODO: Generalize into a normal & tangent projection for sloped boundaries
         size_t x = i % mpm->grid_width;
-        size_t y = i / mpm->grid_width;
-        if (x < 2 || x > mpm->grid_width - 3) {
-            mpm->cells.velocity[i].x = 0.0f;
-            //mpm->cells.velocity[i].y *= 0.3f;
+        size_t y = (size_t)((float)i / (float)mpm->grid_width);
+        size_t center_x = mpm->grid_width / 2;
+        size_t center_y = mpm->grid_height / 2;
+        size_t thickness = 3;
+        if (x < thickness || x > mpm->grid_width - thickness - 1) {
+            float normal = (x < center_x) ? 1.0f : -1.0f;
+
+            if (mpm->cells.velocity[i].x * normal < 0.0f) {
+                mpm->cells.velocity[i].y *= mpm->boundary_friction;
+                mpm->cells.velocity[i].x = 0.0f;
+            }
         }
-        if (y < 2 || y > mpm->grid_height - 3) {
-            mpm->cells.velocity[i].y = 0.0f;
-            //mpm->cells.velocity[i].x *= 0.3f;
+        if (y < thickness || y > mpm->grid_height - thickness - 1) {
+            float normal = (y < center_y) ? 1.0f : -1.0f;
+
+            if (mpm->cells.velocity[i].y * normal < 0.0f) {
+                mpm->cells.velocity[i].x *= mpm->boundary_friction;
+                mpm->cells.velocity[i].y = 0.0f;
+            }
         }
 
         // Degenerate velocities
-        float degen = 350.0f;
+        float degen = 400.0f;
         if (nvVector2_dot(mpm->cells.velocity[i], mpm->cells.velocity[i]) > degen * degen) {
             mpm->cells.velocity[i] = nvVector2_zero;
         }
@@ -499,6 +533,7 @@ static void MPM_g2p(MPM *mpm) {
                     (float)(cell_idx_x + gx - 1),
                     (float)(cell_idx_y + gy - 1)
                 );
+                if (nb_cell_pos.x < 0.0f || nb_cell_pos.y < 0.0f || nb_cell_pos.x > (float)mpm->grid_width - 1.0f || nb_cell_pos.y > (float)mpm->grid_height - 1.0f) continue;
                 nvVector2 nb_cell_dist = nvVector2_add(
                     nvVector2_sub(nb_cell_pos, mpm->particles.position[i]),
                     NV_VECTOR2(0.5f, 0.5f)
@@ -530,9 +565,14 @@ static void MPM_g2p(MPM *mpm) {
             nvVector2_mul(mpm->particles.velocity[i], mpm->dt)
         );
 
-        // Safety clamp to ensure particles don't exit domain
-        mpm->particles.position[i].x = clamp(mpm->particles.position[i].x, 1.0, mpm->grid_width-2);
-        mpm->particles.position[i].y = clamp(mpm->particles.position[i].y, 1.0, mpm->grid_height-2);
+        //Safety clamp to ensure particles don't exit domain and neighbors are valid
+        float safety_m = 1.0f;
+        mpm->particles.position[i].x = clamp(
+            mpm->particles.position[i].x, safety_m, (float)mpm->grid_width - safety_m
+        );
+        mpm->particles.position[i].y = clamp(
+            mpm->particles.position[i].y, safety_m, (float)mpm->grid_height - safety_m
+        );
     
         // Deformation gradient update - MPM course, eq.181
         nvMatrix2 Fp_new = nvMatrix2_identity;
@@ -546,24 +586,25 @@ static void MPM_g2p(MPM *mpm) {
 
         // Soft boundaries
         // TODO: Predicted position needs vel * dt?
-        nvVector2 next_pos = nvVector2_add(mpm->particles.position[i], nvVector2_mul(mpm->particles.velocity[i], mpm->dt));
-        float damping = 0.75f;
-        float wmin = 3.0f;
-        float xmax = (float)mpm->grid_width - (wmin + 1.0f);
-        float ymax = (float)mpm->grid_height - (wmin + 1.0f);
-        if (next_pos.x < wmin) mpm->particles.velocity[i].x += (wmin - next_pos.x) * damping;
-        if (next_pos.y < wmin) mpm->particles.velocity[i].y += (wmin - next_pos.y) * damping;
-        if (next_pos.x > xmax) mpm->particles.velocity[i].x += (xmax - next_pos.x) * damping;
-        if (next_pos.y > ymax) mpm->particles.velocity[i].y += (ymax - next_pos.y) * damping;
+        // nvVector2 next_pos = nvVector2_add(mpm->particles.position[i], nvVector2_mul(mpm->particles.velocity[i], mpm->dt));
+        // float damping = 0.1f;
+        // float wmin = 3.0f;
+        // float xmax = (float)mpm->grid_width - (wmin + 1.0f);
+        // float ymax = (float)mpm->grid_height - (wmin + 1.0f);
+        // if (next_pos.x < wmin) mpm->particles.velocity[i].x += (wmin - next_pos.x) * damping;
+        // if (next_pos.y < wmin) mpm->particles.velocity[i].y += (wmin - next_pos.y) * damping;
+        // if (next_pos.x > xmax) mpm->particles.velocity[i].x += (xmax - next_pos.x) * damping;
+        // if (next_pos.y > ymax) mpm->particles.velocity[i].y += (ymax - next_pos.y) * damping;
     }
 }
 
 void MPM_apply_brush(MPM *mpm, nvVector2 position, float radius, nvVector2 rel) {
+    float real_hertz = 1.0f / ((float)mpm->substeps * mpm->dt);
     for (size_t i = 0; i < mpm->n_particles; i++) {
         nvVector2 delta = nvVector2_sub(mpm->particles.position[i], position);
         if (nvVector2_dot(delta, delta) < radius * radius) {
             // Mode: Drag
-            nvVector2 drag = nvVector2_mul(rel, 1.0f / ((float)mpm->substeps * mpm->dt));
+            nvVector2 drag = nvVector2_mul(rel, real_hertz * 0.5f);
             mpm->particles.velocity[i] = drag;
             //mpm->particles.position[i] = nvVector2_add(mpm->particles.position[i], drag);
         }
@@ -575,10 +616,13 @@ void MPM_get_particle_view(
     char *out_position,
     char *out_velocity,
     char *out_material,
+    char *out_user_color,
     float zoom,
+    nvVector2 offset,
     size_t width,
     size_t height
 ) {
+    float inv_rgb = 1.0f / 255.0f;
     for (size_t i = 0; i < mpm->n_particles; i++) {
         nvVector2 pos = mpm->particles.position[i];
         nvVector2 vel = mpm->particles.velocity[i];
@@ -586,6 +630,8 @@ void MPM_get_particle_view(
         // world -> screen
         pos.x *= zoom;
         pos.y *= zoom;
+        pos.x += offset.x;
+        pos.y += offset.y;
 
         // screen -> ndc
         pos.x = pos.x / (float)width * 2.0f - 1.0f;
@@ -606,5 +652,10 @@ void MPM_get_particle_view(
 
         uint32_t *cout_material = (uint32_t *)out_material;
         cout_material[i] = mpm->particles.material[i];
+
+        float *cout_user_color = (float *)out_user_color;
+        cout_user_color[i * 3 + 0] = (float)mpm->particles.user_color[i].red * inv_rgb;
+        cout_user_color[i * 3 + 1] = (float)mpm->particles.user_color[i].green * inv_rgb;
+        cout_user_color[i * 3 + 2] = (float)mpm->particles.user_color[i].blue * inv_rgb;
     }
 }

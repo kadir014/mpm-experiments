@@ -17,6 +17,7 @@ classifiers = [
 ]
 dependencies = [
     "cffi >= 1.17.0",
+    "pygame-ce",
     "miniprofiler",
     "moderngl"
 ]

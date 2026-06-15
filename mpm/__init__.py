@@ -100,7 +100,8 @@ class MPM:
             velocity: Vector2 = Vector2(0.0, 0.0),
             mass: float = 1.0,
             elastic_lambda: float = 5000.0,
-            elastic_mu: float = 10000.0
+            elastic_mu: float = 10000.0,
+            user_color: tuple[int, int, int] = (0, 0, 0)
             ) -> None:
         lib.MPM_add_elastic_particle(
             self._mpm,
@@ -109,7 +110,8 @@ class MPM:
             mass,
             0.0,
             elastic_lambda,
-            elastic_mu
+            elastic_mu,
+            user_color
         )
 
     def add_fluid_particle(self,
@@ -120,7 +122,8 @@ class MPM:
             rest_density: float = 2.0,
             viscosity: float = 0.0,
             tait_stiffness: float = 185.0,
-            tait_power: float = 6.0
+            tait_power: float = 6.0,
+            user_color: tuple[int, int, int] = (0, 0, 0)
             ) -> None:
         lib.MPM_add_fluid_particle(
             self._mpm,
@@ -131,7 +134,8 @@ class MPM:
             rest_density,
             viscosity,
             tait_stiffness,
-            tait_power
+            tait_power,
+            user_color
         )
 
     def clear(self) -> None:
@@ -155,21 +159,25 @@ class MPM:
 
     def get_particle_view(self,
             zoom: float,
+            offset: tuple[float, float],
             width: int,
             height: int
-            ) -> tuple[bytes, bytes, bytes]:
+            ) -> tuple[bytes, bytes, bytes, bytes]:
         out_position = bytes([0 for _ in range(self.n_particles * 4 * 2)])
         out_velocity = bytes([0 for _ in range(self.n_particles * 4 * 2)])
-        out_material = bytes([0 for _ in range(self.n_particles * 4 * 2)])
+        out_material = bytes([0 for _ in range(self.n_particles * 4 * 1)])
+        out_user_color = bytes([0 for _ in range(self.n_particles * 4 * 3)])
 
         lib.MPM_get_particle_view(
             self._mpm,
             out_position,
             out_velocity,
             out_material,
+            out_user_color,
             zoom,
+            offset,
             width,
             height
         )
 
-        return (out_position, out_velocity, out_material)
+        return (out_position, out_velocity, out_material, out_user_color)

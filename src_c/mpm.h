@@ -9,6 +9,12 @@
 
 
 typedef struct {
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue;
+} UserColor;
+
+typedef struct {
     nvMatrix2 *C;
     nvMatrix2 *F;
     nvVector2 *position;
@@ -23,6 +29,7 @@ typedef struct {
     float *viscosity;
     float *tait_stiffness;
     float *tait_power;
+    UserColor *user_color;
 } Particles;
 
 typedef struct {
@@ -38,6 +45,8 @@ typedef struct {
     nvVector2 gravity;
     float dt;
     size_t substeps;
+
+    float boundary_friction;
 
     size_t n_particles;
     size_t max_particles;
@@ -62,7 +71,8 @@ void MPM_add_elastic_particle(
     float mass,
     float gravity_scale,
     float elastic_lambda,
-    float elastic_mu
+    float elastic_mu,
+    UserColor user_color
 );
 
 void MPM_add_fluid_particle(
@@ -74,7 +84,8 @@ void MPM_add_fluid_particle(
     float rest_density,
     float viscosity,
     float tait_stiffness,
-    float tait_power
+    float tait_power,
+    UserColor user_color
 );
 
 void MPM_clear(MPM *mpm);
@@ -92,7 +103,9 @@ void MPM_get_particle_view(
     char *out_position,
     char *out_velocity,
     char *out_material,
+    char *out_user_color,
     float zoom,
+    nvVector2 offset,
     size_t width,
     size_t height
 );

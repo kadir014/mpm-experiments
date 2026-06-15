@@ -90,7 +90,8 @@ class Particles:
         max_particles = 100_000
         self.pos_buffer = ctx.buffer(reserve=max_particles * 4 * 2, dynamic=True)
         self.vel_buffer = ctx.buffer(reserve=max_particles * 4 * 2, dynamic=True)
-        self.mat_buffer = ctx.buffer(reserve=max_particles * 4, dynamic=True)
+        self.mat_buffer = ctx.buffer(reserve=max_particles * 4 * 1, dynamic=True)
+        self.col_buffer = ctx.buffer(reserve=max_particles * 4 * 3, dynamic=True)
 
         self.load_program(vertex_shader, fragment_shader)
 
@@ -99,7 +100,8 @@ class Particles:
             (
                 (self.pos_buffer, "2f", "in_position"),
                 (self.vel_buffer, "2f", "in_velocity"),
-                (self.mat_buffer, "1u", "in_material")
+                (self.mat_buffer, "1u", "in_material"),
+                (self.col_buffer, "3f", "in_user_color")
             )
         )
 
