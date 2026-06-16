@@ -23,6 +23,7 @@ typedef struct {
     float *gravity_scale;
     uint32_t *material;
     float *volume0;
+    float *affine_conservation;
     float *elastic_lambda;
     float *elastic_mu;
     float *rest_density;
@@ -85,6 +86,7 @@ void MPM_add_fluid_particle(
     float viscosity,
     float tait_stiffness,
     float tait_power,
+    float affine_conservation,
     UserColor user_color
 );
 

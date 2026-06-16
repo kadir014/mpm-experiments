@@ -10,6 +10,7 @@ import miniprofiler
 import mpm
 import brush
 from quad import Quad, Particles
+from ui import Slider
 
 
 WINDOW_SIZE = WINDOW_WIDTH, WINDOW_HEIGHT = 1280, 720
@@ -51,11 +52,6 @@ particles_gl = Particles(ctx, "shaders/particles.vsh", "shaders/particles.fsh")
 
 
 sim = mpm.MPM((100, 100), hertz=40.0, substeps=6)
-#sim.gravity = mpm.Vector2(0.0)
-#sim.gravity = mpm.Vector2(0.0, 3.0)
-sim.gravity = mpm.Vector2(0.0, 9.81) * 2.3
-
-sim._mpm.boundary_friction = 0.7
 
 def spawn(sp: pygame.Vector2, size: tuple[int, int], e: float = 15000.0, mass: float = 1.0, material: int = 1, vel: pygame.Vector2 = pygame.Vector2()) -> None:
     for y in range(size[1]):
@@ -78,17 +74,55 @@ def spawn(sp: pygame.Vector2, size: tuple[int, int], e: float = 15000.0, mass: f
             #     e=10
             
             if material == 1:
-                #sim.add_fluid_particle(p, v, mass=mass*0.3, rest_density=0.3, gravity_scale=-0.6)
+                # Smoke
+                # sim.add_fluid_particle(p, v, mass=mass*1.7, rest_density=3.5, gravity_scale=-2.6)
 
-                sim.add_fluid_particle(p, v, mass=mass*1.0)
-            else:
+                # Water
+                sim.add_fluid_particle(
+                    p, v,
+                    mass=mass*1.1,
+                    rest_density=2.0,
+                    tait_stiffness=180,
+                    tait_power=6,
+                    affine_conservation=1.0
+                )
+
+                # Hot Lava
+                # sim.add_fluid_particle(p, v, mass=mass*2.0, viscosity=10.0, tait_stiffness=30, tait_power=4)
+
+            elif material == 2:
+                sim.add_fluid_particle(p, v, mass=mass*1, rest_density=2, tait_power=5, affine_conservation=0.67, user_color=(255, 129, 51))
+
+            # Oil
+            elif material == 3:
+                sim.add_fluid_particle(
+                    p, v,
+                    mass=mass*0.65,
+                    rest_density=1.0,
+                    tait_stiffness=220,
+                    tait_power=4,
+                    viscosity=2.8,
+                    affine_conservation=0.98,
+                    user_color=(235, 205, 73)
+                )
+
+            elif material == 0:
                 sim.add_elastic_particle(p, v, mass=mass*1.0)
 
     if material == 0:
         sim.precalc_volume()
 
-spawn(pygame.Vector2(3.0, 3.0), (45, 123), material=1)
-spawn(pygame.Vector2(65.0, 64), (5, 45), material=0)
+# Dam break
+#spawn(pygame.Vector2(3.0, 3.0), (45, 123), material=1)
+#spawn(pygame.Vector2(65.0, 64), (5, 45), material=0)
+
+# Water & Lava
+spawn(pygame.Vector2(3.0, 43.0), (45, 60), material=1)
+spawn(pygame.Vector2(97.0-45*0.75, 43), (45, 60), material=2)
+
+# Water & Oild
+#spawn(pygame.Vector2(3.0, 75.0), (127, 30), material=3)
+#spawn(pygame.Vector2(3.0, 50), (127, 30), material=1)
 
 def point_segment_distance(
         p: pygame.Vector2,
@@ -121,6 +155,38 @@ frame_n = 0
 
 stamp_img = pygame.transform.smoothscale_by(pygame.image.load("assets/pygamecelogo.webp"), 0.3).convert_alpha()
 is_stamping = False
+
+sld_gravity_scale = Slider(
+    font,
+    pygame.Vector2(870, 290),
+    "Gravity Scale",
+    min_value=-5.0,
+    max_value=5.0,
+    value=2.3,
+    formatter="{value}x"
+)
+
+sld_fric = Slider(
+    font,
+    pygame.Vector2(870, 315),
+    "Border Friction",
+    min_value=0.0,
+    max_value=1.0,
+    value=0.15
+)
+
+sld_particle_size = Slider(
+    font,
+    pygame.Vector2(870, 340),
+    "Particle Size",
+    min_value=2.0,
+    max_value=16.0,
+    value=7.0,
+    display_integer=True,
+    formatter="{value}px"
+)
+
+ui = (sld_gravity_scale, sld_fric, sld_particle_size)
 
 while is_running:
     dt = clock.tick(MAX_FPS) * 0.001
@@ -200,7 +266,8 @@ while is_running:
         
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:
-                brushengine.down()
+                if mouse.x < 720:
+                    brushengine.down()
 
         elif event.type == pygame.MOUSEBUTTONUP:
             if event.button == 1:
@@ -240,13 +307,21 @@ while is_running:
     pmouse = mouse / ZOOM
     pmouse_rel = pygame.Vector2(*pygame.mouse.get_rel()) / ZOOM
 
+    for e in ui: e.update()
+
     if keys[pygame.K_q]:
         if frame_n >= 5:
             frame_n = 0
             r = pygame.Vector2(uniform(-0.3, 0.3), uniform(-0.3, 0.3))
-            spawn(pmouse-pygame.Vector2(5, 5)+r, (10, 10), mass=1.5, vel=pygame.Vector2(0,80))
+            spawn(pmouse-pygame.Vector2(5, 5)+r, (10, 10), mass=1.0, vel=pygame.Vector2(0,10))
 
     brushengine.update()
+
+    if sld_gravity_scale.changed:
+        sim.gravity = pygame.Vector2(0.0, 9.81) * sld_gravity_scale.value
+
+    if sld_fric.changed:
+        sim._mpm.boundary_friction = 1.0 - sld_fric.value
 
     if not paused:
         with prof.profile("step"):
@@ -346,7 +421,11 @@ while is_running:
         )
         for i, line in enumerate(lines):
             y = i * 18 + 10
-            window.blit(font.render(line, True, (0, 0, 0)), (750, y))
+            window.blit(font.render(line, True, (0, 0, 0)), (730, y))
+
+        pygame.draw.line(window, (210, 210, 210), (730, 270), (WINDOW_WIDTH-20, 270), 1)
+
+        for e in ui: e.render(window)
 
         ctx.clear(0, 0, 0)
 
@@ -359,7 +438,7 @@ while is_running:
         particles_gl.mat_buffer.write(particles_view[2])
         particles_gl.col_buffer.write(particles_view[3])
 
-        ctx.point_size = 7
+        ctx.point_size = sld_particle_size.value
         particles_gl.render(sim.n_particles)
 
         pygame.display.flip()

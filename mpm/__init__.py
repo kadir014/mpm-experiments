@@ -123,6 +123,7 @@ class MPM:
             viscosity: float = 0.0,
             tait_stiffness: float = 185.0,
             tait_power: float = 6.0,
+            affine_conservation: float = 1.0,
             user_color: tuple[int, int, int] = (0, 0, 0)
             ) -> None:
         lib.MPM_add_fluid_particle(
@@ -135,6 +136,7 @@ class MPM:
             viscosity,
             tait_stiffness,
             tait_power,
+            affine_conservation,
             user_color
         )
 

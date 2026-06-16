@@ -71,6 +71,8 @@ MPM *MPM_new(
     if (!(mpm->particles.gravity_scale)) return NULL;
     mpm->particles.volume0 = malloc(sizeof(float) * max_particles);
     if (!(mpm->particles.volume0)) return NULL;
+    mpm->particles.affine_conservation = malloc(sizeof(float) * max_particles);
+    if (!(mpm->particles.affine_conservation)) return NULL;
     mpm->particles.elastic_lambda = malloc(sizeof(float) * max_particles);
     if (!(mpm->particles.elastic_lambda)) return NULL;
     mpm->particles.elastic_mu = malloc(sizeof(float) * max_particles);
@@ -134,12 +136,13 @@ void MPM_add_elastic_particle(
     mpm->particles.F[mpm->n_particles] = nvMatrix2_identity;
     mpm->particles.elastic_lambda[mpm->n_particles] = elastic_lambda;
     mpm->particles.elastic_mu[mpm->n_particles] = elastic_mu;
-    mpm->particles.volume0[mpm->n_particles] = 0.0;
+    mpm->particles.volume0[mpm->n_particles] = 0.0f;
 
-    mpm->particles.rest_density[mpm->n_particles] = 0.0;
-    mpm->particles.viscosity[mpm->n_particles] = 0.0;
-    mpm->particles.tait_stiffness[mpm->n_particles] = 0.0;
-    mpm->particles.tait_power[mpm->n_particles] = 0.0;
+    mpm->particles.affine_conservation[mpm->n_particles] = 1.0f;
+    mpm->particles.rest_density[mpm->n_particles] = 0.0f;
+    mpm->particles.viscosity[mpm->n_particles] = 0.0f;
+    mpm->particles.tait_stiffness[mpm->n_particles] = 0.0f;
+    mpm->particles.tait_power[mpm->n_particles] = 0.0f;
 
     mpm->particles.user_color[mpm->n_particles] = user_color;
 
@@ -156,6 +159,7 @@ void MPM_add_fluid_particle(
     float viscosity,
     float tait_stiffness,
     float tait_power,
+    float affine_conservation,
     UserColor user_color
 ) {
     if (mpm->n_particles >= mpm->max_particles) return;
@@ -174,10 +178,11 @@ void MPM_add_fluid_particle(
     mpm->particles.viscosity[mpm->n_particles] = viscosity;
     mpm->particles.tait_stiffness[mpm->n_particles] = tait_stiffness;
     mpm->particles.tait_power[mpm->n_particles] = tait_power;
+    mpm->particles.affine_conservation[mpm->n_particles] = affine_conservation;
 
-    mpm->particles.elastic_lambda[mpm->n_particles] = 0.0;
-    mpm->particles.elastic_mu[mpm->n_particles] = 0.0;
-    mpm->particles.volume0[mpm->n_particles] = 0.0;
+    mpm->particles.elastic_lambda[mpm->n_particles] = 0.0f;
+    mpm->particles.elastic_mu[mpm->n_particles] = 0.0f;
+    mpm->particles.volume0[mpm->n_particles] = 0.0f;
 
     mpm->particles.user_color[mpm->n_particles] = user_color;
 
@@ -386,6 +391,7 @@ static void MPM_p2g(MPM *mpm) {
                 }
             }
 
+            density = fmaxf(density, 0.00001f);
             float volume = mpm->particles.mass[i] / density;
 
             /*
@@ -558,6 +564,8 @@ static void MPM_g2p(MPM *mpm) {
 
         // TODO: Magic number 4?
         mpm->particles.C[i] = nvMatrix2_muls(B, 4.0f);
+
+        mpm->particles.C[i] = nvMatrix2_muls(mpm->particles.C[i], mpm->particles.affine_conservation[i]);
 
         // Advect particles
         mpm->particles.position[i] = nvVector2_add(
